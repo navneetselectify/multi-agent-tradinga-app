@@ -4,8 +4,16 @@ import * as path from "path";
 
 const testDbPath = path.resolve(process.cwd(), "actions-test.db");
 
-// Set isolated test database URL before any modules are loaded
-process.env.DATABASE_URL = `file:${testDbPath}`;
+// Must run before static imports are resolved: db/client.ts opens the database
+// eagerly, so the isolated file is removed and selected before it is imported.
+vi.hoisted(async () => {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const dbPath = path.resolve(process.cwd(), "actions-test.db");
+  fs.rmSync(dbPath, { force: true });
+  fs.rmSync(`${dbPath}-journal`, { force: true });
+  process.env.DATABASE_URL = `file:${dbPath}`;
+});
 
 // Mock the GoogleGenAI module for offline testing
 const mockGenerateContent = vi.fn();
@@ -30,16 +38,13 @@ import {
   triggerTick,
   executeTrade,
   getAIRecommendation,
+  runTeamTradingCycle,
 } from "../trading";
 
 describe("Server Actions Transport Boundary", () => {
   const originalApiKey = process.env.GEMINI_API_KEY;
 
   beforeAll(async () => {
-    // Ensure clean database
-    if (fs.existsSync(testDbPath)) {
-      fs.unlinkSync(testDbPath);
-    }
     await runMigrations();
   });
 
@@ -175,6 +180,64 @@ describe("Server Actions Transport Boundary", () => {
       const dashboard = await getDashboardData();
       expect(dashboard.cash).toBe(100000.0); // Cash remains exactly unchanged
       expect(dashboard.orders).toHaveLength(0); // No executed trades in log
+    });
+  });
+
+  describe("runTeamTradingCycle()", () => {
+    it("should abort when input is invalid or has missing fields", async () => {
+      const report = await runTeamTradingCycle({
+        action: "BUY",
+        symbol: "BTC",
+        quantity: -10, // Invalid quantity
+        confidence: 0.9,
+        reason: "Breakout",
+      });
+
+      expect(report.outcome).toBe("ABORTED");
+      expect(report.reason).toContain("Proposal failed contract validation");
+    });
+
+    it("should fail cleanly when GEMINI_API_KEY is missing", async () => {
+      delete process.env.GEMINI_API_KEY;
+
+      const report = await runTeamTradingCycle({
+        action: "BUY",
+        symbol: "BTC",
+        quantity: 1,
+        confidence: 0.9,
+        reason: "Valid proposal",
+      });
+
+      expect(report.outcome).toBe("ABORTED");
+      expect(report.reason).toContain("GEMINI_API_KEY is not defined");
+    });
+
+    it("should successfully run the full team trading cycle with a simulated Risk Reviewer Agent response", async () => {
+      // 1. Seed prices so that the hard risk evaluation prices are loaded from DB
+      const prices = await triggerTick();
+      const btcPrice = prices.BTC;
+
+      // 2. Mock Gemini/Risk Reviewer Agent response
+      mockGenerateContent.mockResolvedValueOnce({
+        text: JSON.stringify({
+          verdict: "APPROVE",
+          reason: "Risk-reward profile is extremely safe.",
+        }),
+      });
+
+      const report = await runTeamTradingCycle({
+        action: "BUY",
+        symbol: "BTC",
+        quantity: 0.1,
+        confidence: 0.8,
+        reason: "Valid proposal for integration",
+      });
+
+      expect(report.outcome).toBe("EXECUTED");
+      expect(report.hardRisk?.allowed).toBe(true);
+      expect(report.hardRisk?.executionPrice).toBe(btcPrice);
+      expect(report.verdict?.verdict).toBe("APPROVE");
+      expect(report.order?.status).toBe("EXECUTED");
     });
   });
 });

@@ -1,7 +1,21 @@
 import { z } from "zod";
 import { getGeminiClient } from "@/lib/ai/client";
-import { ToolRegistry } from "./registry";
+import { ToolProvider } from "./registry";
 import { ToolResult } from "./types";
+
+export const DEFAULT_SYSTEM_INSTRUCTION = `You are a trading assistant.
+You can only act through the provided tools.
+Do not invent tool results or pretend to execute actions.
+Use tools when information is required.
+Stop when the user's request is complete.`;
+
+/**
+ * Minimal AgentExecutor configuration. Only the system instruction is
+ * parameterized so specialized roles can share the same execution loop.
+ */
+export interface AgentExecutorConfig {
+  readonly systemInstruction?: string;
+}
 
 export interface AgentResult {
   success: boolean;
@@ -75,10 +89,12 @@ export function zodToGeminiSchema(zodObj: z.ZodObject<any>): any {
 }
 
 export class AgentExecutor {
-  private readonly registry: ToolRegistry;
+  private readonly registry: ToolProvider;
+  private readonly systemInstruction: string;
 
-  constructor(registry: ToolRegistry) {
+  constructor(registry: ToolProvider, config: AgentExecutorConfig = {}) {
     this.registry = registry;
+    this.systemInstruction = config.systemInstruction ?? DEFAULT_SYSTEM_INSTRUCTION;
   }
 
   /**
@@ -104,12 +120,6 @@ export class AgentExecutor {
 
     let currentStep = 0;
 
-    const systemInstruction = `You are a trading assistant.
-You can only act through the provided tools.
-Do not invent tool results or pretend to execute actions.
-Use tools when information is required.
-Stop when the user's request is complete.`;
-
     try {
       while (currentStep < maxSteps) {
         const client = getGeminiClient();
@@ -117,7 +127,7 @@ Stop when the user's request is complete.`;
           model: "gemini-2.5-flash",
           contents: history,
           config: {
-            systemInstruction,
+            systemInstruction: this.systemInstruction,
             tools: declarations.length > 0 ? [{ functionDeclarations: declarations }] : undefined,
             temperature: 0.1,
           },

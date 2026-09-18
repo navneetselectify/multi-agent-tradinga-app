@@ -28,8 +28,9 @@ vi.mock("@/lib/usecases", () => {
 });
 
 import { executeTrade, getDashboardData, triggerTick } from "@/lib/usecases";
-import { AgentExecutor } from "../executor";
+import { AgentExecutor, DEFAULT_SYSTEM_INSTRUCTION } from "../executor";
 import { ToolRegistry } from "../registry";
+import { AgentRole } from "../roles";
 import { GetPortfolioAndMarketStateTool } from "../tools/getPortfolioAndMarketState";
 import { ExecuteAssetTradeTool } from "../tools/executeAssetTrade";
 import { AdvanceMarketTickTool } from "../tools/advanceMarketTick";
@@ -615,5 +616,116 @@ describe("First Trading Agent Executor", () => {
     expect(executeTrade).not.toHaveBeenCalled();
     expect(triggerTick).not.toHaveBeenCalled();
     expect(result.finalResponse).toBe("Based on current prices, it is best to HOLD. Your portfolio state is stable with $100,000 cash.");
+  });
+});
+
+describe("AgentExecutor Role Configuration and Tool Scoping", () => {
+  let registry: ToolRegistry;
+  const originalApiKey = process.env.GEMINI_API_KEY;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.GEMINI_API_KEY = "mock-api-key-for-executor-tests";
+    registry = new ToolRegistry();
+  });
+
+  afterEach(() => {
+    process.env.GEMINI_API_KEY = originalApiKey;
+  });
+
+  it("should use the exact default system instruction when no configuration is provided", async () => {
+    mockGenerateContent.mockResolvedValueOnce({
+      text: "Hello!",
+      candidates: [{ content: { parts: [{ text: "Hello!" }] } }],
+    });
+
+    const executor = new AgentExecutor(registry);
+    await executor.execute("Say hello");
+
+    const firstCall = mockGenerateContent.mock.calls[0][0] as any;
+    expect(firstCall.config.systemInstruction).toBe(DEFAULT_SYSTEM_INSTRUCTION);
+  });
+
+  it("should use a role-provided system instruction when configured", async () => {
+    const analystRole: AgentRole = {
+      name: "analyst",
+      systemInstruction: "You are a read-only market analyst. Never suggest execution.",
+      allowedToolNames: ["get_portfolio_and_market_state"],
+    };
+    registry.register(new GetPortfolioAndMarketStateTool());
+
+    mockGenerateContent.mockResolvedValueOnce({
+      text: "Analysis complete.",
+      candidates: [{ content: { parts: [{ text: "Analysis complete." }] } }],
+    });
+
+    const executor = new AgentExecutor(registry.scoped(analystRole.allowedToolNames), {
+      systemInstruction: analystRole.systemInstruction,
+    });
+    await executor.execute("Analyze the market");
+
+    const firstCall = mockGenerateContent.mock.calls[0][0] as any;
+    expect(firstCall.config.systemInstruction).toBe(analystRole.systemInstruction);
+    expect(firstCall.config.systemInstruction).not.toBe(DEFAULT_SYSTEM_INSTRUCTION);
+  });
+
+  it("should only expose role-allowed tools as Gemini function declarations", async () => {
+    registry.register(new GetPortfolioAndMarketStateTool());
+    registry.register(new ExecuteAssetTradeTool());
+
+    mockGenerateContent.mockResolvedValueOnce({
+      text: "Ready.",
+      candidates: [{ content: { parts: [{ text: "Ready." }] } }],
+    });
+
+    const executor = new AgentExecutor(registry.scoped(["get_portfolio_and_market_state"]));
+    await executor.execute("What tools do you have?");
+
+    const firstCall = mockGenerateContent.mock.calls[0][0] as any;
+    const declarations = firstCall.config.tools[0].functionDeclarations;
+    expect(declarations.map((declaration: any) => declaration.name)).toEqual([
+      "get_portfolio_and_market_state",
+    ]);
+  });
+
+  it("should reject a disallowed tool call with TOOL_NOT_ALLOWED and feed it back to Gemini", async () => {
+    registry.register(new GetPortfolioAndMarketStateTool());
+    registry.register(new ExecuteAssetTradeTool());
+
+    // Turn 1: model attempts a HIGH-risk tool outside its read-only scope
+    mockGenerateContent.mockResolvedValueOnce({
+      candidates: [{
+        content: {
+          parts: [{
+            functionCall: {
+              name: "execute_asset_trade",
+              args: {
+                symbol: "BTC",
+                side: "BUY",
+                quantity: 1,
+                reason: "Not allowed for this role.",
+                confidence: 0.9,
+              },
+            },
+          }],
+        },
+      }],
+    });
+
+    // Turn 2: model reports the denial
+    mockGenerateContent.mockResolvedValueOnce({
+      text: "I am not permitted to execute trades.",
+      candidates: [{ content: { parts: [{ text: "I am not permitted to execute trades." }] } }],
+    });
+
+    const executor = new AgentExecutor(registry.scoped(["get_portfolio_and_market_state"]));
+    const result = await executor.execute("Buy 1 BTC");
+
+    expect(result.success).toBe(true);
+    expect(result.steps).toHaveLength(1);
+    expect(result.steps[0].toolName).toBe("execute_asset_trade");
+    expect(result.steps[0].result.success).toBe(false);
+    expect(result.steps[0].result.error?.code).toBe("TOOL_NOT_ALLOWED");
+    expect(executeTrade).not.toHaveBeenCalled();
   });
 });

@@ -2,9 +2,18 @@ import { vi, describe, it, expect, beforeAll, afterAll, afterEach, beforeEach } 
 import * as fs from "fs";
 import * as path from "path";
 
-const testDbPath = path.resolve(process.cwd(), "agent-test.db");
+// Must run before static imports are resolved: db/client.ts opens the database
+// eagerly, so the isolated file is removed and selected before it is imported.
+vi.hoisted(async () => {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const dbPath = path.resolve(process.cwd(), "agent-test.db");
+  fs.rmSync(dbPath, { force: true });
+  fs.rmSync(`${dbPath}-journal`, { force: true });
+  process.env.DATABASE_URL = `file:${dbPath}`;
+});
 
-process.env.DATABASE_URL = `file:${testDbPath}`;
+const testDbPath = path.resolve(process.cwd(), "agent-test.db");
 
 const mockGenerateContent = vi.fn();
 vi.mock("@google/genai", async (importOriginal) => {
@@ -29,9 +38,6 @@ describe("Agent Server Action Transport Boundary", () => {
   const originalApiKey = process.env.GEMINI_API_KEY;
 
   beforeAll(async () => {
-    if (fs.existsSync(testDbPath)) {
-      fs.unlinkSync(testDbPath);
-    }
     await runMigrations();
   });
 
