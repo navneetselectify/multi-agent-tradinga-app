@@ -6,7 +6,9 @@ import {
   triggerTick,
   executeTrade,
   DashboardData,
+  runTeamTradingCycle,
 } from "./actions/trading";
+import { TradingCycleReport } from "@/lib/usecases";
 import { askAgent, AgentExecutionResult } from "./actions/agent";
 
 function formatCurrency(value: number): string {
@@ -42,6 +44,16 @@ export default function DashboardPage() {
   const [tradeResult, setTradeResult] = useState<string | null>(null);
   const [tradeError, setTradeError] = useState<string | null>(null);
   const [tradeLoading, setTradeLoading] = useState(false);
+
+  // Team Cycle Panel States
+  const [cycleSymbol, setCycleSymbol] = useState("BTC");
+  const [cycleAction, setCycleAction] = useState<"BUY" | "SELL">("BUY");
+  const [cycleQuantity, setCycleQuantity] = useState("");
+  const [cycleConfidence, setCycleConfidence] = useState("0.8");
+  const [cycleReason, setCycleReason] = useState("");
+  const [cycleReport, setCycleReport] = useState<TradingCycleReport | null>(null);
+  const [cycleLoading, setCycleLoading] = useState(false);
+  const [cycleError, setCycleError] = useState<string | null>(null);
 
   const loadDashboard = async () => {
     setDataLoading(true);
@@ -116,6 +128,49 @@ export default function DashboardPage() {
       setTradeError("Trade execution failed. Please try again.");
     } finally {
       setTradeLoading(false);
+    }
+  };
+
+  const handleRunTeamCycle = async (e: FormEvent) => {
+    e.preventDefault();
+    setCycleLoading(true);
+    setCycleError(null);
+    setCycleReport(null);
+
+    const qty = parseFloat(cycleQuantity);
+    if (isNaN(qty) || qty <= 0) {
+      setCycleError("Quantity must be a positive number.");
+      setCycleLoading(false);
+      return;
+    }
+
+    const conf = parseFloat(cycleConfidence);
+    if (isNaN(conf) || conf < 0 || conf > 1) {
+      setCycleError("Confidence must be a number between 0 and 1.");
+      setCycleLoading(false);
+      return;
+    }
+
+    if (!cycleReason.trim()) {
+      setCycleError("Reason must not be empty.");
+      setCycleLoading(false);
+      return;
+    }
+
+    try {
+      const report = await runTeamTradingCycle({
+        action: cycleAction,
+        symbol: cycleSymbol,
+        quantity: qty,
+        confidence: conf,
+        reason: cycleReason.trim(),
+      });
+      setCycleReport(report);
+      await loadDashboard();
+    } catch {
+      setCycleError("An error occurred while executing the team trading cycle.");
+    } finally {
+      setCycleLoading(false);
     }
   };
 
@@ -368,6 +423,223 @@ export default function DashboardPage() {
           {tradeResult && (
             <div className="mt-3 text-sm bg-gray-100 dark:bg-gray-800 rounded-md px-3 py-2">
               {tradeResult}
+            </div>
+          )}
+        </section>
+
+        {/* Team Cycle Action */}
+        <section className="border border-gray-200 dark:border-gray-800 rounded-lg bg-white dark:bg-black p-5">
+          <h2 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">
+            Team Cycle (Multi-Agent Trading Cycle)
+          </h2>
+          <form onSubmit={handleRunTeamCycle} className="flex flex-wrap items-end gap-3 mb-4">
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Symbol</label>
+              <select
+                value={cycleSymbol}
+                onChange={(e) => setCycleSymbol(e.target.value)}
+                className="px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md bg-gray-50 dark:bg-gray-900 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400"
+              >
+                <option value="BTC">BTC</option>
+                <option value="ETH">ETH</option>
+                <option value="SOL">SOL</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Action</label>
+              <select
+                value={cycleAction}
+                onChange={(e) => setCycleAction(e.target.value as "BUY" | "SELL")}
+                className="px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md bg-gray-50 dark:bg-gray-900 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400"
+              >
+                <option value="BUY">BUY</option>
+                <option value="SELL">SELL</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Quantity</label>
+              <input
+                type="number"
+                step="0.0001"
+                min="0.0001"
+                value={cycleQuantity}
+                onChange={(e) => setCycleQuantity(e.target.value)}
+                placeholder="0.0"
+                disabled={cycleLoading}
+                className="w-24 px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md bg-gray-50 dark:bg-gray-900 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-gray-400 disabled:opacity-50"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Confidence</label>
+              <input
+                type="number"
+                step="0.01"
+                min="0.0"
+                max="1.0"
+                value={cycleConfidence}
+                onChange={(e) => setCycleConfidence(e.target.value)}
+                placeholder="0.8"
+                disabled={cycleLoading}
+                className="w-24 px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md bg-gray-50 dark:bg-gray-900 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-gray-400 disabled:opacity-50"
+              />
+            </div>
+            <div className="flex-1 min-w-[200px]">
+              <label className="block text-xs text-gray-500 mb-1">Reason</label>
+              <input
+                type="text"
+                value={cycleReason}
+                onChange={(e) => setCycleReason(e.target.value)}
+                placeholder="e.g. Trend breakout or oversold bounce"
+                disabled={cycleLoading}
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md bg-gray-50 dark:bg-gray-900 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-gray-400 disabled:opacity-50"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={cycleLoading}
+              className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white text-sm font-medium rounded-md disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              {cycleLoading ? "Running Team Cycle…" : "Run Team Cycle"}
+            </button>
+          </form>
+
+          {cycleError && (
+            <div className="text-sm text-red-400 bg-red-50 dark:bg-red-900/20 rounded-md px-3 py-2">
+              {cycleError}
+            </div>
+          )}
+
+          {cycleReport && (
+            <div className="mt-4 border border-gray-100 dark:border-gray-800 rounded-md p-4 space-y-4 bg-gray-50/50 dark:bg-gray-900/30">
+              <div className="flex items-center justify-between border-b border-gray-200 dark:border-gray-800 pb-2">
+                <span className="font-semibold text-sm text-gray-900 dark:text-gray-100">
+                  Trading Cycle Report
+                </span>
+                <span
+                  className={`text-xs font-semibold px-2.5 py-1 rounded-full ${
+                    cycleReport.outcome === "EXECUTED"
+                      ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300"
+                      : cycleReport.outcome === "SKIPPED"
+                      ? "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300"
+                      : "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300"
+                  }`}
+                >
+                  Outcome: {cycleReport.outcome}
+                </span>
+              </div>
+
+              {cycleReport.reason && (
+                <div className="text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-800/50 px-3 py-2 rounded-md">
+                  <span className="font-semibold">Reason:</span> {cycleReport.reason}
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                {/* 1. Hard Risk Service Assessment */}
+                <div className="border border-gray-200 dark:border-gray-800 rounded-md p-3 space-y-1">
+                  <p className="font-semibold text-gray-900 dark:text-gray-100 uppercase tracking-wider text-[10px] text-gray-500 mb-1">
+                    Deterministic Hard Risk Invariant
+                  </p>
+                  {cycleReport.hardRisk ? (
+                    <>
+                      <p>
+                        <span className="font-medium text-gray-500">Allowed:</span>{" "}
+                        <span className={cycleReport.hardRisk.allowed ? "text-green-500 font-semibold" : "text-red-500 font-semibold"}>
+                          {cycleReport.hardRisk.allowed ? "PASS" : "FAIL"}
+                        </span>
+                      </p>
+                      {cycleReport.hardRisk.executionPrice !== null && (
+                        <p><span className="font-medium text-gray-500">Execution Price:</span> {formatPrice(cycleReport.hardRisk.executionPrice)}</p>
+                      )}
+                      {cycleReport.hardRisk.estimatedValue !== null && (
+                        <p><span className="font-medium text-gray-500">Estimated Value:</span> {formatCurrency(cycleReport.hardRisk.estimatedValue)}</p>
+                      )}
+                      {cycleReport.hardRisk.reasons.length > 0 && (
+                        <p className="text-red-400 mt-1 font-medium"><span className="font-medium text-gray-500">Violations:</span> {cycleReport.hardRisk.reasons.join(", ")}</p>
+                      )}
+                    </>
+                  ) : (
+                    <p className="text-gray-400 italic">Not evaluated</p>
+                  )}
+                </div>
+
+                {/* 2. Risk Reviewer Agent Verdict */}
+                <div className="border border-gray-200 dark:border-gray-800 rounded-md p-3 space-y-1">
+                  <p className="font-semibold text-gray-900 dark:text-gray-100 uppercase tracking-wider text-[10px] text-gray-500 mb-1">
+                    Risk Reviewer Agent
+                  </p>
+                  {cycleReport.verdict ? (
+                    <>
+                      <p>
+                        <span className="font-medium text-gray-500">Verdict:</span>{" "}
+                        <span
+                          className={`font-semibold ${
+                            cycleReport.verdict.verdict === "APPROVE"
+                              ? "text-green-500"
+                              : cycleReport.verdict.verdict === "REJECT"
+                              ? "text-red-500"
+                              : "text-amber-500"
+                          }`}
+                        >
+                          {cycleReport.verdict.verdict}
+                        </span>
+                      </p>
+                      {cycleReport.verdict.verdict === "ADJUST" && (
+                        <p><span className="font-medium text-gray-500">Adjusted Qty:</span> {cycleReport.verdict.adjustedQuantity}</p>
+                      )}
+                      <p><span className="font-medium text-gray-500">Reasoning:</span> {cycleReport.verdict.reason}</p>
+                    </>
+                  ) : (
+                    <p className="text-gray-400 italic">No verdict received</p>
+                  )}
+                </div>
+
+                {/* 3. Deterministic Policy Gate decision */}
+                <div className="border border-gray-200 dark:border-gray-800 rounded-md p-3 space-y-1">
+                  <p className="font-semibold text-gray-900 dark:text-gray-100 uppercase tracking-wider text-[10px] text-gray-500 mb-1">
+                    Deterministic Policy Gate
+                  </p>
+                  {cycleReport.gate ? (
+                    <>
+                      <p>
+                        <span className="font-medium text-gray-500">Execution Authorized:</span>{" "}
+                        <span className={cycleReport.gate.execute ? "text-green-500 font-semibold" : "text-red-500 font-semibold"}>
+                          {cycleReport.gate.execute ? "YES" : "NO"}
+                        </span>
+                      </p>
+                      {cycleReport.gate.execute && (
+                        <p><span className="font-medium text-gray-500">Authorized Qty:</span> {cycleReport.gate.quantity}</p>
+                      )}
+                      <p><span className="font-medium text-gray-500">Logic Reason:</span> {cycleReport.gate.reason}</p>
+                    </>
+                  ) : (
+                    <p className="text-gray-400 italic">Not evaluated</p>
+                  )}
+                </div>
+
+                {/* 4. Execution Order Result */}
+                <div className="border border-gray-200 dark:border-gray-800 rounded-md p-3 space-y-1">
+                  <p className="font-semibold text-gray-900 dark:text-gray-100 uppercase tracking-wider text-[10px] text-gray-500 mb-1">
+                    Exchange Order Execution
+                  </p>
+                  {cycleReport.order ? (
+                    <>
+                      <p>
+                        <span className="font-medium text-gray-500">Order Status:</span>{" "}
+                        <span className={cycleReport.order.status === "EXECUTED" ? "text-green-500 font-semibold" : "text-amber-500 font-semibold"}>
+                          {cycleReport.order.status}
+                        </span>
+                      </p>
+                      <p><span className="font-medium text-gray-500">Order ID:</span> {cycleReport.order.orderId}</p>
+                      {cycleReport.order.reason && (
+                        <p><span className="font-medium text-gray-500">Exchange Reason:</span> {cycleReport.order.reason}</p>
+                      )}
+                    </>
+                  ) : (
+                    <p className="text-gray-400 italic">No order submitted</p>
+                  )}
+                </div>
+              </div>
             </div>
           )}
         </section>

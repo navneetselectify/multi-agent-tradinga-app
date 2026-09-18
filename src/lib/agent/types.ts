@@ -18,7 +18,7 @@ export interface ToolResult<TOutput = any> {
   success: boolean;
   data?: TOutput;
   error?: {
-    code: string;       // e.g., "VALIDATION_ERROR" | "BUSINESS_RULE_VIOLATION" | "SYSTEM_ERROR" | "TOOL_NOT_FOUND"
+    code: string;       // e.g., "VALIDATION_ERROR" | "BUSINESS_RULE_VIOLATION" | "SYSTEM_ERROR" | "TOOL_NOT_FOUND" | "TOOL_NOT_ALLOWED"
     message: string;    // Human-readable message
     details?: string[]; // Nested schema validation fields or rules violated
   };
