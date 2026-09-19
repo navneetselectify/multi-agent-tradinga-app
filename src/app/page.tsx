@@ -1,68 +1,970 @@
-import Image from "next/image";
+"use client";
 
-export default function Home() {
+import { useState, useEffect, FormEvent } from "react";
+import {
+  getDashboardData,
+  triggerTick,
+  executeTrade,
+  DashboardData,
+  runTeamTradingCycle,
+} from "./actions/trading";
+import { runParallelAnalysisAction } from "./actions/analysis";
+import { TradingCycleReport } from "@/lib/usecases";
+import { CombinedAnalysis } from "@/lib/agent";
+import { askAgent, AgentExecutionResult } from "./actions/agent";
+
+function formatCurrency(value: number): string {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+  }).format(value);
+}
+
+function formatPrice(value: number): string {
+  if (value >= 1000) {
+    return `$${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  }
+  return `$${value.toFixed(2)}`;
+}
+
+export default function DashboardPage() {
+  const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
+  const [dataLoading, setDataLoading] = useState(true);
+  const [dataError, setDataError] = useState<string | null>(null);
+
+  const [agentInput, setAgentInput] = useState("");
+  const [agentResult, setAgentResult] = useState<AgentExecutionResult | null>(null);
+  const [agentLoading, setAgentLoading] = useState(false);
+  const [agentError, setAgentError] = useState<string | null>(null);
+
+  const [tickLoading, setTickLoading] = useState(false);
+  const [tickError, setTickError] = useState<string | null>(null);
+
+  const [tradeSymbol, setTradeSymbol] = useState("BTC");
+  const [tradeSide, setTradeSide] = useState<"BUY" | "SELL">("BUY");
+  const [tradeQuantity, setTradeQuantity] = useState("");
+  const [tradeResult, setTradeResult] = useState<string | null>(null);
+  const [tradeError, setTradeError] = useState<string | null>(null);
+  const [tradeLoading, setTradeLoading] = useState(false);
+
+  // Team Cycle Panel States
+  const [cycleSymbol, setCycleSymbol] = useState("BTC");
+  const [cycleAction, setCycleAction] = useState<"BUY" | "SELL">("BUY");
+  const [cycleQuantity, setCycleQuantity] = useState("");
+  const [cycleConfidence, setCycleConfidence] = useState("0.8");
+  const [cycleReason, setCycleReason] = useState("");
+  const [cycleReport, setCycleReport] = useState<TradingCycleReport | null>(null);
+  const [cycleLoading, setCycleLoading] = useState(false);
+  const [cycleError, setCycleError] = useState<string | null>(null);
+
+  // Parallel Analysis Panel States (Epic 4.6)
+  const [parallelSymbol, setParallelSymbol] = useState("BTC");
+  const [parallelAction, setParallelAction] = useState<"BUY" | "SELL">("BUY");
+  const [parallelQuantity, setParallelQuantity] = useState("1.0");
+  const [parallelTimeoutMs, setParallelTimeoutMs] = useState("5000");
+  const [parallelMarketDelayMs, setParallelMarketDelayMs] = useState("0");
+  const [parallelResult, setParallelResult] = useState<CombinedAnalysis | null>(null);
+  const [parallelLoading, setParallelLoading] = useState(false);
+  const [parallelError, setParallelError] = useState<string | null>(null);
+
+  const loadDashboard = async () => {
+    setDataLoading(true);
+    setDataError(null);
+    try {
+      const data = await getDashboardData();
+      setDashboardData(data);
+    } catch {
+      setDataError("Failed to load dashboard data. Please try again.");
+    } finally {
+      setDataLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadDashboard();
+  }, []);
+
+  const handleAskAgent = async () => {
+    setAgentLoading(true);
+    setAgentError(null);
+    setAgentResult(null);
+    try {
+      const result = await askAgent(agentInput);
+      setAgentResult(result);
+    } catch {
+      setAgentError("An error occurred while communicating with the agent.");
+    } finally {
+      setAgentLoading(false);
+    }
+  };
+
+  const handleAdvanceTick = async () => {
+    setTickLoading(true);
+    setTickError(null);
+    try {
+      await triggerTick();
+      await loadDashboard();
+    } catch {
+      setTickError("Failed to advance market tick. Please try again.");
+    } finally {
+      setTickLoading(false);
+    }
+  };
+
+  const handleExecuteTrade = async (e: FormEvent) => {
+    e.preventDefault();
+    setTradeLoading(true);
+    setTradeError(null);
+    setTradeResult(null);
+
+    const quantity = parseFloat(tradeQuantity);
+    if (isNaN(quantity) || quantity <= 0) {
+      setTradeError("Quantity must be a positive number.");
+      setTradeLoading(false);
+      return;
+    }
+
+    try {
+      const result = await executeTrade(tradeSymbol, tradeSide, quantity);
+      if (result.status === "EXECUTED") {
+        setTradeResult(
+          `${tradeSide} ${quantity} ${tradeSymbol} executed successfully. (Order ID: ${result.orderId})`
+        );
+      } else {
+        setTradeResult(
+          `${tradeSide} ${quantity} ${tradeSymbol} was ${result.status.toLowerCase()}: ${result.reason || "No reason provided."}`
+        );
+      }
+      await loadDashboard();
+    } catch {
+      setTradeError("Trade execution failed. Please try again.");
+    } finally {
+      setTradeLoading(false);
+    }
+  };
+
+  const handleRunTeamCycle = async (e: FormEvent) => {
+    e.preventDefault();
+    setCycleLoading(true);
+    setCycleError(null);
+    setCycleReport(null);
+
+    const qty = parseFloat(cycleQuantity);
+    if (isNaN(qty) || qty <= 0) {
+      setCycleError("Quantity must be a positive number.");
+      setCycleLoading(false);
+      return;
+    }
+
+    const conf = parseFloat(cycleConfidence);
+    if (isNaN(conf) || conf < 0 || conf > 1) {
+      setCycleError("Confidence must be a number between 0 and 1.");
+      setCycleLoading(false);
+      return;
+    }
+
+    if (!cycleReason.trim()) {
+      setCycleError("Reason must not be empty.");
+      setCycleLoading(false);
+      return;
+    }
+
+    try {
+      const report = await runTeamTradingCycle({
+        action: cycleAction,
+        symbol: cycleSymbol,
+        quantity: qty,
+        confidence: conf,
+        reason: cycleReason.trim(),
+      });
+      setCycleReport(report);
+      await loadDashboard();
+    } catch {
+      setCycleError("An error occurred while executing the team trading cycle.");
+    } finally {
+      setCycleLoading(false);
+    }
+  };
+
+  const handleRunParallelAnalysis = async (e: FormEvent) => {
+    e.preventDefault();
+    setParallelLoading(true);
+    setParallelError(null);
+    setParallelResult(null);
+
+    const qty = parseFloat(parallelQuantity);
+    const timeout = parseInt(parallelTimeoutMs, 10);
+    const marketDelay = parseInt(parallelMarketDelayMs, 10);
+
+    try {
+      const result = await runParallelAnalysisAction({
+        symbol: parallelSymbol,
+        action: parallelAction,
+        quantity: isNaN(qty) || qty <= 0 ? 1 : qty,
+        timeouts: {
+          defaultTimeoutMs: isNaN(timeout) || timeout <= 0 ? 5000 : timeout,
+        },
+        delays: {
+          marketMs: isNaN(marketDelay) || marketDelay < 0 ? 0 : marketDelay,
+        },
+      });
+      setParallelResult(result);
+    } catch {
+      setParallelError("An error occurred while executing parallel analysis.");
+    } finally {
+      setParallelLoading(false);
+    }
+  };
+
+  const prices = dashboardData?.prices ?? { BTC: 0, ETH: 0, SOL: 0 };
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
+    <div className="min-h-screen bg-white dark:bg-black">
+      {/* Header */}
+      <header className="border-b border-gray-200 dark:border-gray-800 bg-white dark:bg-black">
+        <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
+          <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">
+            AI Trading Workstation
           </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+          <div className="flex items-center gap-2">
+            <span className="inline-block w-2 h-2 rounded-full bg-green-500" />
+            <span className="text-sm text-gray-500 dark:text-gray-400">
+              Local / Mock Exchange
+            </span>
+          </div>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
+      </header>
+
+      <main className="max-w-6xl mx-auto px-4 py-6 space-y-6">
+        {/* Portfolio Summary */}
+        <section className="border border-gray-200 dark:border-gray-800 rounded-lg bg-white dark:bg-black p-5">
+          <h2 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">
+            Portfolio Summary
+          </h2>
+          {dataLoading ? (
+            <div className="text-sm text-gray-400">Loading portfolio…</div>
+          ) : dataError ? (
+            <div className="text-sm text-red-400">{dataError}</div>
+          ) : dashboardData ? (
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div>
+                <p className="text-xs text-gray-500 mb-1">Cash</p>
+                <p className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+                  {formatCurrency(dashboardData.cash)}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-gray-500 mb-1">Holdings Value</p>
+                <p className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+                  {formatCurrency(dashboardData.holdingsValue)}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-gray-500 mb-1">Net Asset Value</p>
+                <p className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+                  {formatCurrency(dashboardData.netAssetValue)}
+                </p>
+              </div>
+            </div>
+          ) : null}
+        </section>
+
+        {/* Market */}
+        <section className="border border-gray-200 dark:border-gray-800 rounded-lg bg-white dark:bg-black p-5">
+          <h2 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">
+            Market
+          </h2>
+          {dataLoading ? (
+            <div className="text-sm text-gray-400">Loading market…</div>
+          ) : (
+            <div className="grid grid-cols-3 gap-4">
+              {(["BTC", "ETH", "SOL"] as const).map((symbol) => (
+                <div key={symbol} className="text-center">
+                  <p className="text-xs text-gray-500 mb-1">{symbol}</p>
+                  <p className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+                    {formatPrice(prices[symbol] ?? 0)}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        {/* Agent Panel */}
+        <section className="border border-gray-200 dark:border-gray-800 rounded-lg bg-white dark:bg-black p-5">
+          <h2 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">
+            Agent Panel
+          </h2>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={agentInput}
+              onChange={(e) => setAgentInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !agentLoading) {
+                  handleAskAgent();
+                }
+              }}
+              placeholder="Ask the agent, e.g. Check my current portfolio and market prices."
+              disabled={agentLoading}
+              className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md bg-gray-50 dark:bg-gray-900 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-gray-400 disabled:opacity-50"
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+            <button
+              onClick={handleAskAgent}
+              disabled={agentLoading || !agentInput.trim()}
+              className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              {agentLoading ? "Thinking…" : "Ask Agent"}
+            </button>
+          </div>
+
+          {agentError && (
+            <div className="mt-3 text-sm text-red-400 bg-red-50 dark:bg-red-900/20 rounded-md px-3 py-2">
+              {agentError}
+            </div>
+          )}
+
+          {agentResult && (
+            <div className="mt-4 space-y-3">
+              <div className="text-sm bg-gray-100 dark:bg-gray-800 rounded-md px-3 py-2">
+                <span className="font-medium text-gray-900 dark:text-gray-100">
+                  Agent:
+                </span>{" "}
+                <span className="text-gray-700 dark:text-gray-300">
+                  {agentResult.finalResponse}
+                </span>
+              </div>
+
+              {agentResult.steps.length > 0 && (
+                <div>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
+                    Agent Activity
+                  </p>
+                  <div className="space-y-2">
+                    {agentResult.steps.map((step) => (
+                      <div
+                        key={step.stepNumber}
+                        className="border border-gray-200 dark:border-gray-800 rounded-md p-3 text-sm"
+                      >
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="font-medium text-gray-900 dark:text-gray-100">
+                            Step {step.stepNumber}: {step.toolName}
+                          </span>
+                          <span
+                            className={`text-xs px-2 py-0.5 rounded-full ${
+                              step.success
+                                ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
+                                : "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
+                            }`}
+                          >
+                            {step.success ? "Success" : "Failed"}
+                          </span>
+                        </div>
+                        <div className="text-xs text-gray-500 dark:text-gray-400 space-y-0.5">
+                          <p>
+                            <span className="font-medium text-gray-600 dark:text-gray-300">
+                              Arguments:
+                            </span>{" "}
+                            <code className="bg-gray-100 dark:bg-gray-900 px-1 rounded">
+                              {JSON.stringify(step.arguments)}
+                            </code>
+                          </p>
+                          <p>
+                            <span className="font-medium text-gray-600 dark:text-gray-300">
+                              Result:
+                            </span>{" "}
+                            <span className="text-gray-700 dark:text-gray-300">
+                              {step.resultSummary}
+                            </span>
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+
+        {/* Market Action */}
+        <section className="border border-gray-200 dark:border-gray-800 rounded-lg bg-white dark:bg-black p-5">
+          <h2 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">
+            Market Action
+          </h2>
+          <button
+            onClick={handleAdvanceTick}
+            disabled={tickLoading}
+            className="px-4 py-2 border border-gray-300 dark:border-gray-700 text-sm font-medium rounded-md hover:bg-gray-50 dark:hover:bg-gray-900 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
-            Documentation
-          </a>
-        </div>
+            {tickLoading ? "Advancing…" : "Advance Market Tick"}
+          </button>
+          {tickError && (
+            <div className="mt-3 text-sm text-red-400 bg-red-50 dark:bg-red-900/20 rounded-md px-3 py-2">
+              {tickError}
+            </div>
+          )}
+        </section>
+
+        {/* Trade Action */}
+        <section className="border border-gray-200 dark:border-gray-800 rounded-lg bg-white dark:bg-black p-5">
+          <h2 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">
+            Trade
+          </h2>
+          <form onSubmit={handleExecuteTrade} className="flex flex-wrap items-end gap-3">
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Symbol</label>
+              <select
+                value={tradeSymbol}
+                onChange={(e) => setTradeSymbol(e.target.value)}
+                className="px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md bg-gray-50 dark:bg-gray-900 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400"
+              >
+                <option value="BTC">BTC</option>
+                <option value="ETH">ETH</option>
+                <option value="SOL">SOL</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Side</label>
+              <select
+                value={tradeSide}
+                onChange={(e) => setTradeSide(e.target.value as "BUY" | "SELL")}
+                className="px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md bg-gray-50 dark:bg-gray-900 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400"
+              >
+                <option value="BUY">BUY</option>
+                <option value="SELL">SELL</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Quantity</label>
+              <input
+                type="number"
+                step="0.0001"
+                min="0.0001"
+                value={tradeQuantity}
+                onChange={(e) => setTradeQuantity(e.target.value)}
+                placeholder="0.0"
+                disabled={tradeLoading}
+                className="w-28 px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md bg-gray-50 dark:bg-gray-900 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-gray-400 disabled:opacity-50"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={tradeLoading}
+              className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              {tradeLoading ? "Executing…" : "Execute"}
+            </button>
+          </form>
+
+          {tradeError && (
+            <div className="mt-3 text-sm text-red-400 bg-red-50 dark:bg-red-900/20 rounded-md px-3 py-2">
+              {tradeError}
+            </div>
+          )}
+          {tradeResult && (
+            <div className="mt-3 text-sm bg-gray-100 dark:bg-gray-800 rounded-md px-3 py-2">
+              {tradeResult}
+            </div>
+          )}
+        </section>
+
+        {/* Team Cycle Action */}
+        <section className="border border-gray-200 dark:border-gray-800 rounded-lg bg-white dark:bg-black p-5">
+          <h2 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">
+            Team Cycle (Multi-Agent Trading Cycle)
+          </h2>
+          <form onSubmit={handleRunTeamCycle} className="flex flex-wrap items-end gap-3 mb-4">
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Symbol</label>
+              <select
+                value={cycleSymbol}
+                onChange={(e) => setCycleSymbol(e.target.value)}
+                className="px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md bg-gray-50 dark:bg-gray-900 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400"
+              >
+                <option value="BTC">BTC</option>
+                <option value="ETH">ETH</option>
+                <option value="SOL">SOL</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Action</label>
+              <select
+                value={cycleAction}
+                onChange={(e) => setCycleAction(e.target.value as "BUY" | "SELL")}
+                className="px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md bg-gray-50 dark:bg-gray-900 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400"
+              >
+                <option value="BUY">BUY</option>
+                <option value="SELL">SELL</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Quantity</label>
+              <input
+                type="number"
+                step="0.0001"
+                min="0.0001"
+                value={cycleQuantity}
+                onChange={(e) => setCycleQuantity(e.target.value)}
+                placeholder="0.0"
+                disabled={cycleLoading}
+                className="w-24 px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md bg-gray-50 dark:bg-gray-900 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-gray-400 disabled:opacity-50"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Confidence</label>
+              <input
+                type="number"
+                step="0.01"
+                min="0.0"
+                max="1.0"
+                value={cycleConfidence}
+                onChange={(e) => setCycleConfidence(e.target.value)}
+                placeholder="0.8"
+                disabled={cycleLoading}
+                className="w-24 px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md bg-gray-50 dark:bg-gray-900 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-gray-400 disabled:opacity-50"
+              />
+            </div>
+            <div className="flex-1 min-w-[200px]">
+              <label className="block text-xs text-gray-500 mb-1">Reason</label>
+              <input
+                type="text"
+                value={cycleReason}
+                onChange={(e) => setCycleReason(e.target.value)}
+                placeholder="e.g. Trend breakout or oversold bounce"
+                disabled={cycleLoading}
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md bg-gray-50 dark:bg-gray-900 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-gray-400 disabled:opacity-50"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={cycleLoading}
+              className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white text-sm font-medium rounded-md disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              {cycleLoading ? "Running Team Cycle…" : "Run Team Cycle"}
+            </button>
+          </form>
+
+          {cycleError && (
+            <div className="text-sm text-red-400 bg-red-50 dark:bg-red-900/20 rounded-md px-3 py-2">
+              {cycleError}
+            </div>
+          )}
+
+          {cycleReport && (
+            <div className="mt-4 border border-gray-100 dark:border-gray-800 rounded-md p-4 space-y-4 bg-gray-50/50 dark:bg-gray-900/30">
+              <div className="flex items-center justify-between border-b border-gray-200 dark:border-gray-800 pb-2">
+                <span className="font-semibold text-sm text-gray-900 dark:text-gray-100">
+                  Trading Cycle Report
+                </span>
+                <span
+                  className={`text-xs font-semibold px-2.5 py-1 rounded-full ${
+                    cycleReport.outcome === "EXECUTED"
+                      ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300"
+                      : cycleReport.outcome === "SKIPPED"
+                      ? "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300"
+                      : "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300"
+                  }`}
+                >
+                  Outcome: {cycleReport.outcome}
+                </span>
+              </div>
+
+              {cycleReport.reason && (
+                <div className="text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-800/50 px-3 py-2 rounded-md">
+                  <span className="font-semibold">Reason:</span> {cycleReport.reason}
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                {/* 1. Hard Risk Service Assessment */}
+                <div className="border border-gray-200 dark:border-gray-800 rounded-md p-3 space-y-1">
+                  <p className="font-semibold text-gray-900 dark:text-gray-100 uppercase tracking-wider text-[10px] text-gray-500 mb-1">
+                    Deterministic Hard Risk Invariant
+                  </p>
+                  {cycleReport.hardRisk ? (
+                    <>
+                      <p>
+                        <span className="font-medium text-gray-500">Allowed:</span>{" "}
+                        <span className={cycleReport.hardRisk.allowed ? "text-green-500 font-semibold" : "text-red-500 font-semibold"}>
+                          {cycleReport.hardRisk.allowed ? "PASS" : "FAIL"}
+                        </span>
+                      </p>
+                      {cycleReport.hardRisk.executionPrice !== null && (
+                        <p><span className="font-medium text-gray-500">Execution Price:</span> {formatPrice(cycleReport.hardRisk.executionPrice)}</p>
+                      )}
+                      {cycleReport.hardRisk.estimatedValue !== null && (
+                        <p><span className="font-medium text-gray-500">Estimated Value:</span> {formatCurrency(cycleReport.hardRisk.estimatedValue)}</p>
+                      )}
+                      {cycleReport.hardRisk.reasons.length > 0 && (
+                        <p className="text-red-400 mt-1 font-medium"><span className="font-medium text-gray-500">Violations:</span> {cycleReport.hardRisk.reasons.join(", ")}</p>
+                      )}
+                    </>
+                  ) : (
+                    <p className="text-gray-400 italic">Not evaluated</p>
+                  )}
+                </div>
+
+                {/* 2. Risk Reviewer Agent Verdict */}
+                <div className="border border-gray-200 dark:border-gray-800 rounded-md p-3 space-y-1">
+                  <p className="font-semibold text-gray-900 dark:text-gray-100 uppercase tracking-wider text-[10px] text-gray-500 mb-1">
+                    Risk Reviewer Agent
+                  </p>
+                  {cycleReport.verdict ? (
+                    <>
+                      <p>
+                        <span className="font-medium text-gray-500">Verdict:</span>{" "}
+                        <span
+                          className={`font-semibold ${
+                            cycleReport.verdict.verdict === "APPROVE"
+                              ? "text-green-500"
+                              : cycleReport.verdict.verdict === "REJECT"
+                              ? "text-red-500"
+                              : "text-amber-500"
+                          }`}
+                        >
+                          {cycleReport.verdict.verdict}
+                        </span>
+                      </p>
+                      {cycleReport.verdict.verdict === "ADJUST" && (
+                        <p><span className="font-medium text-gray-500">Adjusted Qty:</span> {cycleReport.verdict.adjustedQuantity}</p>
+                      )}
+                      <p><span className="font-medium text-gray-500">Reasoning:</span> {cycleReport.verdict.reason}</p>
+                    </>
+                  ) : (
+                    <p className="text-gray-400 italic">No verdict received</p>
+                  )}
+                </div>
+
+                {/* 3. Deterministic Policy Gate decision */}
+                <div className="border border-gray-200 dark:border-gray-800 rounded-md p-3 space-y-1">
+                  <p className="font-semibold text-gray-900 dark:text-gray-100 uppercase tracking-wider text-[10px] text-gray-500 mb-1">
+                    Deterministic Policy Gate
+                  </p>
+                  {cycleReport.gate ? (
+                    <>
+                      <p>
+                        <span className="font-medium text-gray-500">Execution Authorized:</span>{" "}
+                        <span className={cycleReport.gate.execute ? "text-green-500 font-semibold" : "text-red-500 font-semibold"}>
+                          {cycleReport.gate.execute ? "YES" : "NO"}
+                        </span>
+                      </p>
+                      {cycleReport.gate.execute && (
+                        <p><span className="font-medium text-gray-500">Authorized Qty:</span> {cycleReport.gate.quantity}</p>
+                      )}
+                      <p><span className="font-medium text-gray-500">Logic Reason:</span> {cycleReport.gate.reason}</p>
+                    </>
+                  ) : (
+                    <p className="text-gray-400 italic">Not evaluated</p>
+                  )}
+                </div>
+
+                {/* 4. Execution Order Result */}
+                <div className="border border-gray-200 dark:border-gray-800 rounded-md p-3 space-y-1">
+                  <p className="font-semibold text-gray-900 dark:text-gray-100 uppercase tracking-wider text-[10px] text-gray-500 mb-1">
+                    Exchange Order Execution
+                  </p>
+                  {cycleReport.order ? (
+                    <>
+                      <p>
+                        <span className="font-medium text-gray-500">Order Status:</span>{" "}
+                        <span className={cycleReport.order.status === "EXECUTED" ? "text-green-500 font-semibold" : "text-amber-500 font-semibold"}>
+                          {cycleReport.order.status}
+                        </span>
+                      </p>
+                      <p><span className="font-medium text-gray-500">Order ID:</span> {cycleReport.order.orderId}</p>
+                      {cycleReport.order.reason && (
+                        <p><span className="font-medium text-gray-500">Exchange Reason:</span> {cycleReport.order.reason}</p>
+                      )}
+                    </>
+                  ) : (
+                    <p className="text-gray-400 italic">No order submitted</p>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </section>
+
+        {/* Parallel Analysis (Multi-Agent Fan-Out — Epic 4) */}
+        <section className="border border-gray-200 dark:border-gray-800 rounded-lg bg-white dark:bg-black p-5">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+              Parallel Analysis (Multi-Agent Fan-Out)
+            </h2>
+            <span className="text-xs bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300 font-medium px-2 py-0.5 rounded">
+              Pure Analysis • No Trades Executed
+            </span>
+          </div>
+          <p className="text-xs text-gray-500 mb-4">
+            Runs Market Analyst, Risk Analyst, and Portfolio Analyst concurrently via Promise.allSettled() with per-analyst timeout guards.
+          </p>
+          <form onSubmit={handleRunParallelAnalysis} className="flex flex-wrap items-end gap-3 mb-4">
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Symbol</label>
+              <select
+                value={parallelSymbol}
+                onChange={(e) => setParallelSymbol(e.target.value)}
+                className="px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md bg-gray-50 dark:bg-gray-900 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400"
+              >
+                <option value="BTC">BTC</option>
+                <option value="ETH">ETH</option>
+                <option value="SOL">SOL</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Proposed Action</label>
+              <select
+                value={parallelAction}
+                onChange={(e) => setParallelAction(e.target.value as "BUY" | "SELL")}
+                className="px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md bg-gray-50 dark:bg-gray-900 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400"
+              >
+                <option value="BUY">BUY</option>
+                <option value="SELL">SELL</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Quantity</label>
+              <input
+                type="number"
+                step="0.01"
+                min="0.01"
+                value={parallelQuantity}
+                onChange={(e) => setParallelQuantity(e.target.value)}
+                disabled={parallelLoading}
+                className="w-24 px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md bg-gray-50 dark:bg-gray-900 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-gray-400 disabled:opacity-50"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Timeout (ms)</label>
+              <input
+                type="number"
+                step="500"
+                min="500"
+                value={parallelTimeoutMs}
+                onChange={(e) => setParallelTimeoutMs(e.target.value)}
+                disabled={parallelLoading}
+                className="w-28 px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md bg-gray-50 dark:bg-gray-900 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-gray-400 disabled:opacity-50"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Market Delay (ms)</label>
+              <input
+                type="number"
+                step="500"
+                min="0"
+                value={parallelMarketDelayMs}
+                onChange={(e) => setParallelMarketDelayMs(e.target.value)}
+                placeholder="0"
+                disabled={parallelLoading}
+                className="w-28 px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md bg-gray-50 dark:bg-gray-900 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-gray-400 disabled:opacity-50"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={parallelLoading}
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-md disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              {parallelLoading ? "Running Parallel Analysis…" : "Run Parallel Analysis"}
+            </button>
+          </form>
+
+          {parallelError && (
+            <div className="text-sm text-red-400 bg-red-50 dark:bg-red-900/20 rounded-md px-3 py-2 mb-4">
+              {parallelError}
+            </div>
+          )}
+
+          {parallelResult && (
+            <div className="mt-4 border border-gray-100 dark:border-gray-800 rounded-md p-4 space-y-4 bg-gray-50/50 dark:bg-gray-900/30">
+              {/* Summary / Header */}
+              <div className="flex flex-wrap items-center justify-between border-b border-gray-200 dark:border-gray-800 pb-3 gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold text-sm text-gray-900 dark:text-gray-100">
+                    Combined Analysis Outcome
+                  </span>
+                  <span
+                    className={`text-xs font-semibold px-2.5 py-1 rounded-full ${
+                      parallelResult.status === "COMPLETE"
+                        ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300"
+                        : "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300"
+                    }`}
+                  >
+                    Status: {parallelResult.status}
+                  </span>
+                </div>
+                <div className="flex items-center gap-3 text-xs font-medium">
+                  <span>
+                    Execution Allowed:{" "}
+                    <strong
+                      className={
+                        parallelResult.executionAllowed
+                          ? "text-green-600 dark:text-green-400 font-bold"
+                          : "text-red-600 dark:text-red-400 font-bold"
+                      }
+                    >
+                      {parallelResult.executionAllowed ? "YES" : "NO"}
+                    </strong>
+                  </span>
+                  {parallelResult.action && (
+                    <span className="bg-gray-200 dark:bg-gray-800 px-2 py-0.5 rounded font-mono">
+                      Action: {parallelResult.action}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Reasons & Summary */}
+              {parallelResult.summary && (
+                <div className="text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-800/50 px-3 py-2 rounded-md">
+                  <span className="font-semibold">Summary:</span> {parallelResult.summary}
+                </div>
+              )}
+
+              {parallelResult.reasons.length > 0 && (
+                <div className="text-xs text-gray-600 dark:text-gray-400 space-y-1 bg-white dark:bg-gray-900 p-2.5 rounded border border-gray-200 dark:border-gray-800">
+                  <span className="font-semibold text-gray-700 dark:text-gray-300">Decision Reasons:</span>
+                  <ul className="list-disc list-inside space-y-0.5">
+                    {parallelResult.reasons.map((reason, idx) => (
+                      <li key={idx}>{reason}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Failures / Timeouts Notice */}
+              {parallelResult.failures.length > 0 && (
+                <div className="border border-red-200 dark:border-red-900/40 bg-red-50/70 dark:bg-red-950/20 rounded-md p-3">
+                  <h4 className="text-xs font-bold text-red-800 dark:text-red-300 uppercase mb-1">
+                    Analyst Failures / Timeouts ({parallelResult.failures.length})
+                  </h4>
+                  <ul className="text-xs text-red-700 dark:text-red-400 space-y-1">
+                    {parallelResult.failures.map((f, i) => (
+                      <li key={i}>
+                        <strong className="uppercase">[{f.analyst}]:</strong> {f.reason}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* 3 Analyst Individual Results */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+                {/* 1. Market Analyst */}
+                <div className="border border-gray-200 dark:border-gray-800 rounded-md p-3 space-y-1 bg-white dark:bg-black">
+                  <p className="font-semibold text-gray-900 dark:text-gray-100 uppercase tracking-wider text-[10px] text-gray-500 mb-1">
+                    1. Market Analyst
+                  </p>
+                  {parallelResult.market ? (
+                    <>
+                      <p>
+                        <span className="font-medium text-gray-500">Signal:</span>{" "}
+                        <span className="font-bold text-blue-600 dark:text-blue-400">
+                          {parallelResult.market.signal}
+                        </span>{" "}
+                        <span className="text-gray-400 font-normal">
+                          ({(parallelResult.market.confidence * 100).toFixed(0)}% confidence)
+                        </span>
+                      </p>
+                      <p>
+                        <span className="font-medium text-gray-500">Conditions:</span>{" "}
+                        {parallelResult.market.marketConditions}
+                      </p>
+                      <p>
+                        <span className="font-medium text-gray-500">Reason:</span>{" "}
+                        {parallelResult.market.reason}
+                      </p>
+                      {parallelResult.market.externalFactors.length > 0 && (
+                        <div className="mt-1 pt-1 border-t border-gray-100 dark:border-gray-800">
+                          <span className="text-[10px] text-gray-400 uppercase">External Factors:</span>
+                          <ul className="list-disc list-inside text-gray-600 dark:text-gray-400">
+                            {parallelResult.market.externalFactors.map((fact, idx) => (
+                              <li key={idx}>{fact}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <p className="text-red-400 italic">Failed or timed out</p>
+                  )}
+                </div>
+
+                {/* 2. Risk Analyst */}
+                <div className="border border-gray-200 dark:border-gray-800 rounded-md p-3 space-y-1 bg-white dark:bg-black">
+                  <p className="font-semibold text-gray-900 dark:text-gray-100 uppercase tracking-wider text-[10px] text-gray-500 mb-1">
+                    2. Risk Analyst
+                  </p>
+                  {parallelResult.risk ? (
+                    <>
+                      <p>
+                        <span className="font-medium text-gray-500">Status:</span>{" "}
+                        <span
+                          className={`font-bold ${
+                            parallelResult.risk.status === "APPROVED"
+                              ? "text-green-600 dark:text-green-400"
+                              : "text-red-600 dark:text-red-400"
+                          }`}
+                        >
+                          {parallelResult.risk.status}
+                        </span>
+                      </p>
+                      {parallelResult.risk.reasons.length > 0 && (
+                        <p>
+                          <span className="font-medium text-gray-500">Reasons:</span>{" "}
+                          {parallelResult.risk.reasons.join(", ")}
+                        </p>
+                      )}
+                      {parallelResult.risk.topRisks.length > 0 && (
+                        <p>
+                          <span className="font-medium text-gray-500">Top Risks:</span>{" "}
+                          {parallelResult.risk.topRisks.join(", ")}
+                        </p>
+                      )}
+                      {parallelResult.risk.riskFactors.length > 0 && (
+                        <p className="text-gray-500">
+                          <span className="font-medium">Factors:</span>{" "}
+                          {parallelResult.risk.riskFactors.join(", ")}
+                        </p>
+                      )}
+                    </>
+                  ) : (
+                    <p className="text-red-400 italic">Failed or timed out</p>
+                  )}
+                </div>
+
+                {/* 3. Portfolio Analyst */}
+                <div className="border border-gray-200 dark:border-gray-800 rounded-md p-3 space-y-1 bg-white dark:bg-black">
+                  <p className="font-semibold text-gray-900 dark:text-gray-100 uppercase tracking-wider text-[10px] text-gray-500 mb-1">
+                    3. Portfolio Analyst
+                  </p>
+                  {parallelResult.portfolio ? (
+                    <>
+                      <p>
+                        <span className="font-medium text-gray-500">Trade Amount:</span>{" "}
+                        {formatCurrency(parallelResult.portfolio.tradeAmount)}
+                      </p>
+                      <p>
+                        <span className="font-medium text-gray-500">Current Exposure:</span>{" "}
+                        {formatCurrency(parallelResult.portfolio.currentExposure)}
+                      </p>
+                      <p>
+                        <span className="font-medium text-gray-500">Impact:</span>{" "}
+                        {parallelResult.portfolio.portfolioImpact}
+                      </p>
+                      <p>
+                        <span className="font-medium text-gray-500">Reason:</span>{" "}
+                        {parallelResult.portfolio.reason}
+                      </p>
+                    </>
+                  ) : (
+                    <p className="text-red-400 italic">Failed or timed out</p>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </section>
       </main>
     </div>
   );

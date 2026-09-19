@@ -1,11 +1,19 @@
-import { beforeAll, afterAll, beforeEach, describe, it, expect } from "vitest";
+import { beforeAll, afterAll, beforeEach, describe, it, expect, vi } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 
-const testDbPath = path.resolve(process.cwd(), "exchange-test.db");
+// Must run before static imports are resolved: db/client.ts opens the database
+// eagerly, so the isolated file is removed and selected before it is imported.
+vi.hoisted(async () => {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const dbPath = path.resolve(process.cwd(), "exchange-test.db");
+  fs.rmSync(dbPath, { force: true });
+  fs.rmSync(`${dbPath}-journal`, { force: true });
+  process.env.DATABASE_URL = `file:${dbPath}`;
+});
 
-// Isolate database file before importing client
-process.env.DATABASE_URL = `file:${testDbPath}`;
+const testDbPath = path.resolve(process.cwd(), "exchange-test.db");
 
 import { db } from "@/lib/db/client";
 import { runMigrations } from "@/lib/db/migrate";
@@ -16,10 +24,6 @@ describe("Mock Exchange & Order Execution", () => {
   let engine: MockExchangeEngine;
 
   beforeAll(async () => {
-    // Delete old test database if any
-    if (fs.existsSync(testDbPath)) {
-      fs.unlinkSync(testDbPath);
-    }
     // Initialize schema
     await runMigrations();
   });
