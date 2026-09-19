@@ -5,3 +5,5 @@ export { ToolRegistry, ScopedToolRegistry } from "./registry";
 export type { ToolProvider } from "./registry";
 export * from "./tools";
 export * from "./reviewer";
+export * from "./parallelAnalysis";
+export * from "./aggregator";

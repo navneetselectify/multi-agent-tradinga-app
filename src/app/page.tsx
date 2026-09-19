@@ -8,7 +8,9 @@ import {
   DashboardData,
   runTeamTradingCycle,
 } from "./actions/trading";
+import { runParallelAnalysisAction } from "./actions/analysis";
 import { TradingCycleReport } from "@/lib/usecases";
+import { CombinedAnalysis } from "@/lib/agent";
 import { askAgent, AgentExecutionResult } from "./actions/agent";
 
 function formatCurrency(value: number): string {
@@ -54,6 +56,16 @@ export default function DashboardPage() {
   const [cycleReport, setCycleReport] = useState<TradingCycleReport | null>(null);
   const [cycleLoading, setCycleLoading] = useState(false);
   const [cycleError, setCycleError] = useState<string | null>(null);
+
+  // Parallel Analysis Panel States (Epic 4.6)
+  const [parallelSymbol, setParallelSymbol] = useState("BTC");
+  const [parallelAction, setParallelAction] = useState<"BUY" | "SELL">("BUY");
+  const [parallelQuantity, setParallelQuantity] = useState("1.0");
+  const [parallelTimeoutMs, setParallelTimeoutMs] = useState("5000");
+  const [parallelMarketDelayMs, setParallelMarketDelayMs] = useState("0");
+  const [parallelResult, setParallelResult] = useState<CombinedAnalysis | null>(null);
+  const [parallelLoading, setParallelLoading] = useState(false);
+  const [parallelError, setParallelError] = useState<string | null>(null);
 
   const loadDashboard = async () => {
     setDataLoading(true);
@@ -171,6 +183,36 @@ export default function DashboardPage() {
       setCycleError("An error occurred while executing the team trading cycle.");
     } finally {
       setCycleLoading(false);
+    }
+  };
+
+  const handleRunParallelAnalysis = async (e: FormEvent) => {
+    e.preventDefault();
+    setParallelLoading(true);
+    setParallelError(null);
+    setParallelResult(null);
+
+    const qty = parseFloat(parallelQuantity);
+    const timeout = parseInt(parallelTimeoutMs, 10);
+    const marketDelay = parseInt(parallelMarketDelayMs, 10);
+
+    try {
+      const result = await runParallelAnalysisAction({
+        symbol: parallelSymbol,
+        action: parallelAction,
+        quantity: isNaN(qty) || qty <= 0 ? 1 : qty,
+        timeouts: {
+          defaultTimeoutMs: isNaN(timeout) || timeout <= 0 ? 5000 : timeout,
+        },
+        delays: {
+          marketMs: isNaN(marketDelay) || marketDelay < 0 ? 0 : marketDelay,
+        },
+      });
+      setParallelResult(result);
+    } catch {
+      setParallelError("An error occurred while executing parallel analysis.");
+    } finally {
+      setParallelLoading(false);
     }
   };
 
@@ -637,6 +679,286 @@ export default function DashboardPage() {
                     </>
                   ) : (
                     <p className="text-gray-400 italic">No order submitted</p>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </section>
+
+        {/* Parallel Analysis (Multi-Agent Fan-Out — Epic 4) */}
+        <section className="border border-gray-200 dark:border-gray-800 rounded-lg bg-white dark:bg-black p-5">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+              Parallel Analysis (Multi-Agent Fan-Out)
+            </h2>
+            <span className="text-xs bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300 font-medium px-2 py-0.5 rounded">
+              Pure Analysis • No Trades Executed
+            </span>
+          </div>
+          <p className="text-xs text-gray-500 mb-4">
+            Runs Market Analyst, Risk Analyst, and Portfolio Analyst concurrently via Promise.allSettled() with per-analyst timeout guards.
+          </p>
+          <form onSubmit={handleRunParallelAnalysis} className="flex flex-wrap items-end gap-3 mb-4">
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Symbol</label>
+              <select
+                value={parallelSymbol}
+                onChange={(e) => setParallelSymbol(e.target.value)}
+                className="px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md bg-gray-50 dark:bg-gray-900 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400"
+              >
+                <option value="BTC">BTC</option>
+                <option value="ETH">ETH</option>
+                <option value="SOL">SOL</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Proposed Action</label>
+              <select
+                value={parallelAction}
+                onChange={(e) => setParallelAction(e.target.value as "BUY" | "SELL")}
+                className="px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md bg-gray-50 dark:bg-gray-900 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-gray-400"
+              >
+                <option value="BUY">BUY</option>
+                <option value="SELL">SELL</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Quantity</label>
+              <input
+                type="number"
+                step="0.01"
+                min="0.01"
+                value={parallelQuantity}
+                onChange={(e) => setParallelQuantity(e.target.value)}
+                disabled={parallelLoading}
+                className="w-24 px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md bg-gray-50 dark:bg-gray-900 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-gray-400 disabled:opacity-50"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Timeout (ms)</label>
+              <input
+                type="number"
+                step="500"
+                min="500"
+                value={parallelTimeoutMs}
+                onChange={(e) => setParallelTimeoutMs(e.target.value)}
+                disabled={parallelLoading}
+                className="w-28 px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md bg-gray-50 dark:bg-gray-900 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-gray-400 disabled:opacity-50"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Market Delay (ms)</label>
+              <input
+                type="number"
+                step="500"
+                min="0"
+                value={parallelMarketDelayMs}
+                onChange={(e) => setParallelMarketDelayMs(e.target.value)}
+                placeholder="0"
+                disabled={parallelLoading}
+                className="w-28 px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md bg-gray-50 dark:bg-gray-900 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-gray-400 disabled:opacity-50"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={parallelLoading}
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-md disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              {parallelLoading ? "Running Parallel Analysis…" : "Run Parallel Analysis"}
+            </button>
+          </form>
+
+          {parallelError && (
+            <div className="text-sm text-red-400 bg-red-50 dark:bg-red-900/20 rounded-md px-3 py-2 mb-4">
+              {parallelError}
+            </div>
+          )}
+
+          {parallelResult && (
+            <div className="mt-4 border border-gray-100 dark:border-gray-800 rounded-md p-4 space-y-4 bg-gray-50/50 dark:bg-gray-900/30">
+              {/* Summary / Header */}
+              <div className="flex flex-wrap items-center justify-between border-b border-gray-200 dark:border-gray-800 pb-3 gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold text-sm text-gray-900 dark:text-gray-100">
+                    Combined Analysis Outcome
+                  </span>
+                  <span
+                    className={`text-xs font-semibold px-2.5 py-1 rounded-full ${
+                      parallelResult.status === "COMPLETE"
+                        ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300"
+                        : "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300"
+                    }`}
+                  >
+                    Status: {parallelResult.status}
+                  </span>
+                </div>
+                <div className="flex items-center gap-3 text-xs font-medium">
+                  <span>
+                    Execution Allowed:{" "}
+                    <strong
+                      className={
+                        parallelResult.executionAllowed
+                          ? "text-green-600 dark:text-green-400 font-bold"
+                          : "text-red-600 dark:text-red-400 font-bold"
+                      }
+                    >
+                      {parallelResult.executionAllowed ? "YES" : "NO"}
+                    </strong>
+                  </span>
+                  {parallelResult.action && (
+                    <span className="bg-gray-200 dark:bg-gray-800 px-2 py-0.5 rounded font-mono">
+                      Action: {parallelResult.action}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Reasons & Summary */}
+              {parallelResult.summary && (
+                <div className="text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-800/50 px-3 py-2 rounded-md">
+                  <span className="font-semibold">Summary:</span> {parallelResult.summary}
+                </div>
+              )}
+
+              {parallelResult.reasons.length > 0 && (
+                <div className="text-xs text-gray-600 dark:text-gray-400 space-y-1 bg-white dark:bg-gray-900 p-2.5 rounded border border-gray-200 dark:border-gray-800">
+                  <span className="font-semibold text-gray-700 dark:text-gray-300">Decision Reasons:</span>
+                  <ul className="list-disc list-inside space-y-0.5">
+                    {parallelResult.reasons.map((reason, idx) => (
+                      <li key={idx}>{reason}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Failures / Timeouts Notice */}
+              {parallelResult.failures.length > 0 && (
+                <div className="border border-red-200 dark:border-red-900/40 bg-red-50/70 dark:bg-red-950/20 rounded-md p-3">
+                  <h4 className="text-xs font-bold text-red-800 dark:text-red-300 uppercase mb-1">
+                    Analyst Failures / Timeouts ({parallelResult.failures.length})
+                  </h4>
+                  <ul className="text-xs text-red-700 dark:text-red-400 space-y-1">
+                    {parallelResult.failures.map((f, i) => (
+                      <li key={i}>
+                        <strong className="uppercase">[{f.analyst}]:</strong> {f.reason}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* 3 Analyst Individual Results */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+                {/* 1. Market Analyst */}
+                <div className="border border-gray-200 dark:border-gray-800 rounded-md p-3 space-y-1 bg-white dark:bg-black">
+                  <p className="font-semibold text-gray-900 dark:text-gray-100 uppercase tracking-wider text-[10px] text-gray-500 mb-1">
+                    1. Market Analyst
+                  </p>
+                  {parallelResult.market ? (
+                    <>
+                      <p>
+                        <span className="font-medium text-gray-500">Signal:</span>{" "}
+                        <span className="font-bold text-blue-600 dark:text-blue-400">
+                          {parallelResult.market.signal}
+                        </span>{" "}
+                        <span className="text-gray-400 font-normal">
+                          ({(parallelResult.market.confidence * 100).toFixed(0)}% confidence)
+                        </span>
+                      </p>
+                      <p>
+                        <span className="font-medium text-gray-500">Conditions:</span>{" "}
+                        {parallelResult.market.marketConditions}
+                      </p>
+                      <p>
+                        <span className="font-medium text-gray-500">Reason:</span>{" "}
+                        {parallelResult.market.reason}
+                      </p>
+                      {parallelResult.market.externalFactors.length > 0 && (
+                        <div className="mt-1 pt-1 border-t border-gray-100 dark:border-gray-800">
+                          <span className="text-[10px] text-gray-400 uppercase">External Factors:</span>
+                          <ul className="list-disc list-inside text-gray-600 dark:text-gray-400">
+                            {parallelResult.market.externalFactors.map((fact, idx) => (
+                              <li key={idx}>{fact}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <p className="text-red-400 italic">Failed or timed out</p>
+                  )}
+                </div>
+
+                {/* 2. Risk Analyst */}
+                <div className="border border-gray-200 dark:border-gray-800 rounded-md p-3 space-y-1 bg-white dark:bg-black">
+                  <p className="font-semibold text-gray-900 dark:text-gray-100 uppercase tracking-wider text-[10px] text-gray-500 mb-1">
+                    2. Risk Analyst
+                  </p>
+                  {parallelResult.risk ? (
+                    <>
+                      <p>
+                        <span className="font-medium text-gray-500">Status:</span>{" "}
+                        <span
+                          className={`font-bold ${
+                            parallelResult.risk.status === "APPROVED"
+                              ? "text-green-600 dark:text-green-400"
+                              : "text-red-600 dark:text-red-400"
+                          }`}
+                        >
+                          {parallelResult.risk.status}
+                        </span>
+                      </p>
+                      {parallelResult.risk.reasons.length > 0 && (
+                        <p>
+                          <span className="font-medium text-gray-500">Reasons:</span>{" "}
+                          {parallelResult.risk.reasons.join(", ")}
+                        </p>
+                      )}
+                      {parallelResult.risk.topRisks.length > 0 && (
+                        <p>
+                          <span className="font-medium text-gray-500">Top Risks:</span>{" "}
+                          {parallelResult.risk.topRisks.join(", ")}
+                        </p>
+                      )}
+                      {parallelResult.risk.riskFactors.length > 0 && (
+                        <p className="text-gray-500">
+                          <span className="font-medium">Factors:</span>{" "}
+                          {parallelResult.risk.riskFactors.join(", ")}
+                        </p>
+                      )}
+                    </>
+                  ) : (
+                    <p className="text-red-400 italic">Failed or timed out</p>
+                  )}
+                </div>
+
+                {/* 3. Portfolio Analyst */}
+                <div className="border border-gray-200 dark:border-gray-800 rounded-md p-3 space-y-1 bg-white dark:bg-black">
+                  <p className="font-semibold text-gray-900 dark:text-gray-100 uppercase tracking-wider text-[10px] text-gray-500 mb-1">
+                    3. Portfolio Analyst
+                  </p>
+                  {parallelResult.portfolio ? (
+                    <>
+                      <p>
+                        <span className="font-medium text-gray-500">Trade Amount:</span>{" "}
+                        {formatCurrency(parallelResult.portfolio.tradeAmount)}
+                      </p>
+                      <p>
+                        <span className="font-medium text-gray-500">Current Exposure:</span>{" "}
+                        {formatCurrency(parallelResult.portfolio.currentExposure)}
+                      </p>
+                      <p>
+                        <span className="font-medium text-gray-500">Impact:</span>{" "}
+                        {parallelResult.portfolio.portfolioImpact}
+                      </p>
+                      <p>
+                        <span className="font-medium text-gray-500">Reason:</span>{" "}
+                        {parallelResult.portfolio.reason}
+                      </p>
+                    </>
+                  ) : (
+                    <p className="text-red-400 italic">Failed or timed out</p>
                   )}
                 </div>
               </div>

@@ -11,3 +11,11 @@ export type {
 } from "./runTradingCycle";
 export { applyPolicyGate } from "./policyGate";
 export type { GateDecision, PolicyGateInput } from "./policyGate";
+export {
+  runParallelTradingAnalysis,
+  createDefaultDeterministicAnalysts,
+} from "./runParallelTradingAnalysis";
+export type {
+  ParallelTradingAnalysisInput,
+  ParallelTradingAnalysisDependencies,
+} from "./runParallelTradingAnalysis";
