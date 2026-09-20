@@ -1,4 +1,5 @@
 import { db } from "@/lib/db/client";
+import { tradeEvents } from "@/lib/events";
 
 export interface OrderResult {
   orderId: number;
@@ -88,8 +89,18 @@ export class OrderService {
         });
 
         await tx.commit();
+
+        const orderId = Number(insertRes.lastInsertRowid);
+        tradeEvents.emit("trade.executed", {
+          orderId,
+          symbol: uppercaseSymbol,
+          side: "BUY",
+          quantity,
+          price,
+        });
+
         return {
-          orderId: Number(insertRes.lastInsertRowid),
+          orderId,
           status: "EXECUTED",
         };
 
@@ -153,8 +164,18 @@ export class OrderService {
         });
 
         await tx.commit();
+
+        const orderId = Number(insertRes.lastInsertRowid);
+        tradeEvents.emit("trade.executed", {
+          orderId,
+          symbol: uppercaseSymbol,
+          side: "SELL",
+          quantity,
+          price,
+        });
+
         return {
-          orderId: Number(insertRes.lastInsertRowid),
+          orderId,
           status: "EXECUTED",
         };
       }

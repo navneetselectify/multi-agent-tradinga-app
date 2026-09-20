@@ -16,6 +16,11 @@ describe("SQLite Persistence", () => {
     if (fs.existsSync(testDbPath)) {
       fs.unlinkSync(testDbPath);
     }
+    try {
+      await db.execute("DELETE FROM portfolio_state");
+    } catch {
+      // Ignore if table does not exist prior to migrations
+    }
   });
 
   afterAll(async () => {
