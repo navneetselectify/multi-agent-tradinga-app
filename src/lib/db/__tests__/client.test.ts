@@ -1,28 +1,24 @@
-import { beforeAll, afterAll, describe, it, expect } from "vitest";
+import { afterAll, describe, it, expect, vi } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 
-const testDbPath = path.resolve(process.cwd(), "test.db");
+// Must run before static imports are resolved: db/client.ts opens the database
+// eagerly, so the isolated file is removed and selected before it is imported.
+vi.hoisted(async () => {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const dbPath = path.resolve(process.cwd(), "test.db");
+  fs.rmSync(dbPath, { force: true });
+  fs.rmSync(`${dbPath}-journal`, { force: true });
+  process.env.DATABASE_URL = `file:${dbPath}`;
+});
 
-// Set environment variable before any modules are loaded
-process.env.DATABASE_URL = `file:${testDbPath}`;
+const testDbPath = path.resolve(process.cwd(), "test.db");
 
 import { db } from "@/lib/db/client";
 import { runMigrations } from "@/lib/db/migrate";
 
 describe("SQLite Persistence", () => {
-  beforeAll(async () => {
-    // Ensure clean test database
-    if (fs.existsSync(testDbPath)) {
-      fs.unlinkSync(testDbPath);
-    }
-    try {
-      await db.execute("DELETE FROM portfolio_state");
-    } catch {
-      // Ignore if table does not exist prior to migrations
-    }
-  });
-
   afterAll(async () => {
     // Close connection so we can delete the file safely
     db.close();

@@ -43,32 +43,32 @@ export const AGENT_ROLES = {
 /**
  * Metadata contract that an Agent consumes to understand and discover capabilities.
  */
-export interface ToolDefinition<TInput extends z.ZodTypeAny = z.ZodTypeAny> {
+export interface ToolDefinition<TInput extends z.ZodTypeAny = z.ZodObject<any>> {
   readonly name: string;
   readonly description: string;
   readonly inputSchema: TInput;
   readonly isReadOnly: boolean;
   readonly riskLevel: "LOW" | "MEDIUM" | "HIGH";
-  readonly requiredPermission: Permission;
+  readonly requiredPermission?: Permission;
 }
 
 /**
  * Execution payload wrapper returned to the Agent cognitive layer.
  */
-export interface ToolResult<TOutput = unknown> {
+export interface ToolResult<TOutput = any> {
   success: boolean;
   data?: TOutput;
   error?: {
-    code: string;
-    message: string;
-    details?: string[];
+    code: string;       // e.g., "VALIDATION_ERROR" | "BUSINESS_RULE_VIOLATION" | "SYSTEM_ERROR" | "TOOL_NOT_FOUND" | "TOOL_NOT_ALLOWED" | "PERMISSION_DENIED"
+    message: string;    // Human-readable message
+    details?: string[]; // Nested schema validation fields or rules violated
   };
 }
 
 /**
  * Complete Agent Tool contract containing both declaration and runtime execution handler.
  */
-export interface AgentTool<TInput extends z.ZodTypeAny = z.ZodTypeAny, TOutput = unknown>
+export interface AgentTool<TInput extends z.ZodTypeAny = z.ZodObject<any>, TOutput = any>
   extends ToolDefinition<TInput> {
   /**
    * Safe execution entry point. Ensures typed arguments are passed after schema validation.
