@@ -19,3 +19,5 @@ export type {
   ParallelTradingAnalysisInput,
   ParallelTradingAnalysisDependencies,
 } from "./runParallelTradingAnalysis";
+export { runOrchestratedTradingRun } from "./runOrchestratedTradingRun";
+export type { OrchestratedRunDependencies } from "./runOrchestratedTradingRun";

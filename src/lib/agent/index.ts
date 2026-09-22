@@ -8,3 +8,4 @@ export * from "./tools";
 export * from "./reviewer";
 export * from "./parallelAnalysis";
 export * from "./aggregator";
+export * from "./synthesizer";

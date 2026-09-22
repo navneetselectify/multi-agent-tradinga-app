@@ -142,3 +142,35 @@ export const CombinedAnalysisSchema = z
   .strict();
 
 export type CombinedAnalysis = z.infer<typeof CombinedAnalysisSchema>;
+
+/**
+ * Epic 6: candidate trade submitted to the analysis-driven orchestrator.
+ *
+ * The parallel analysis pipeline requires a candidate action up front; the
+ * synthesizer only confirms or vetoes it. This input is DATA, never authority.
+ */
+export interface OrchestratedRunInput {
+  symbol: string;
+  quantity: number;
+  action?: "BUY" | "SELL";
+  minConfidence?: number;
+}
+
+/**
+ * Strict contract for the Epic 6 orchestrated trading report.
+ *
+ * `status` is the overall outcome. `cycleOutcome` is null when the deterministic
+ * synthesizer vetoed the trade before the guarded trading cycle was invoked.
+ */
+export const OrchestratedTradingReportSchema = z
+  .object({
+    status: z.enum(["EXECUTED", "SKIPPED", "ABORTED"]),
+    analysis: CombinedAnalysisSchema,
+    proposal: TradeProposalSchema.nullable(),
+    synthesisReason: z.string().trim().min(1, "Synthesis reason must not be empty."),
+    cycleOutcome: z.enum(["EXECUTED", "SKIPPED", "ABORTED"]).nullable(),
+    reason: z.string().nullable(),
+  })
+  .strict();
+
+export type OrchestratedTradingReport = z.infer<typeof OrchestratedTradingReportSchema>;
