@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { AgentTool, ToolResult } from "../types";
-import { getDashboardData, DashboardData } from "@/lib/usecases";
+import { getDashboardData, DashboardData } from "@/app/actions/trading";
 
 export const GetPortfolioAndMarketStateInput = z.object({}).strict();
 
@@ -10,9 +10,10 @@ export class GetPortfolioAndMarketStateTool implements AgentTool<typeof GetPortf
   readonly inputSchema = GetPortfolioAndMarketStateInput;
   readonly isReadOnly = true;
   readonly riskLevel = "LOW" as const;
+  readonly requiredPermission = "portfolio.read" as const;
 
-  async execute(args: unknown): Promise<ToolResult<DashboardData>> {
-    const parsed = this.inputSchema.safeParse(args);
+  async execute(args: unknown = {}): Promise<ToolResult<DashboardData>> {
+    const parsed = this.inputSchema.safeParse(args ?? {});
     if (!parsed.success) {
       return {
         success: false,
@@ -30,12 +31,13 @@ export class GetPortfolioAndMarketStateTool implements AgentTool<typeof GetPortf
         success: true,
         data,
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Failed to retrieve portfolio and market state.";
       return {
         success: false,
         error: {
           code: "BUSINESS_RULE_VIOLATION",
-          message: error?.message || "Failed to retrieve portfolio and market state.",
+          message,
         },
       };
     }

@@ -1,4 +1,5 @@
 export * from "./types";
+export * from "./executor";
 export * from "./roles";
 export * from "./contracts";
 export { ToolRegistry, ScopedToolRegistry } from "./registry";
